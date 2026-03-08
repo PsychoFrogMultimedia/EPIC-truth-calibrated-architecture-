@@ -64,11 +64,15 @@ A basic wrapper integrating Claude (via Anthropic API) + simple in-memory RAG fo
 
 - Dependencies:
 
-  Requires: Anthropic API key  
+- Requires: Anthropic API key  
 
-  Set as env var: `export ANTHROPIC_API_KEY=sk-ant-...`  
+  Set as env var:
+   
+  ```bash
+  export ANTHROPIC_API_KEY=sk-ant-api03-...your-key...
 
-  Get one:
+  
+- Get one:
   https://console.anthropic.com/settings/keys
 
   ```bash
