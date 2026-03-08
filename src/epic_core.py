@@ -1,40 +1,175 @@
-from __future__ import annotations
-from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Dict, Any, List, Optional
 
-from .arc_engine import ARCEngine
-from .cfi_engine import CFIEngine
+from .epic_loader import EpicSpecLoader
 from .epic_state import EpicState
+from .cfi_engine import CFIEngine
+from .arc_engine import ARCEngine
 
 
-@dataclass
 class EpicCore:
-    spec: Dict[str, Any]
-    state: EpicState
+    """Full EPIC runtime engine — loads spec and executes a governed EPIC turn."""
 
-    def __post_init__(self) -> None:
-        self.arc = ARCEngine(self.spec)
+    def __init__(self, spec_path: str = "docs/EPIC-v10-Operational-Spec.json"):
+        self.loader = EpicSpecLoader(spec_path)
+        self.spec = self.loader.full_spec
+        self.state = EpicState()
         self.cfi = CFIEngine(self.spec)
+        self.arc = ARCEngine(self.spec)
 
-    def probe(self, user_input: str) -> Dict[str, Any]:
-        domain = "EED" if "?" in user_input or len(user_input.split()) > 8 else "WED"
-        return {
+    def process_query(self, query: str, history: Optional[List[str]] = None) -> str:
+        """Execute one complete EPIC turn using the spec-defined flow."""
+        history = history or []
+
+        telemetry = self.state.get_telemetry()
+        telemetry["task_profile"] = "query_processing"
+        telemetry["query"] = query
+        telemetry["history_size"] = len(history)
+
+        # 1. Probe
+        domain = self._probe_domain(query)
+        self.state.domain = domain
+        telemetry["domain"] = domain
+
+        # 2. Branch
+        candidate_lanes = self.spec["decision_tables"]["lane_priority_order"]
+        telemetry["candidate_lanes"] = candidate_lanes
+
+        # 3. Map
+        claims = self.arc.decompose_claims(query)
+        telemetry["claims"] = claims
+
+        # 4. CFI
+        # Assumes CFI returns: band, forecast_scores, new_cfi_state
+        band, forecast_scores, new_cfi_state = self.cfi.forecast(query, history)
+        telemetry["steering_band"] = band
+        telemetry["forecast_scores"] = forecast_scores
+
+        # 5. ARC
+        anchors = self._get_anchors()
+        anchor_score = self.arc.score_anchors(anchors)
+
+        # Apply same score to all claims for now.
+        # Later this should be per-claim support scoring.
+        claim_states = self.arc.assign_states(claims, [anchor_score] * len(claims))
+        telemetry["claim_states"] = claim_states
+        telemetry["anchors"] = anchors
+        telemetry["anchor_score"] = anchor_score
+
+        # 6. Resolve lane
+        lane = self._resolve_lane(band, claim_states, candidate_lanes)
+        telemetry["resolved_lane"] = lane
+
+        # 7. Define response with disclosure
+        base_response = f"This is a governed response to your query: {query}"
+        disclosed = self._apply_disclosure(lane, claim_states, base_response)
+        telemetry["final_response"] = disclosed
+
+        # 8. Maintain
+        maintain_output = {
             "domain": domain,
-            "ambiguity_load": 0.3 if " or " in user_input.lower() else 0.1,
-            "cost_of_wrong": 0.7 if any(k in user_input.lower() for k in ["medical", "legal", "financial"]) else 0.2,
+            "steering_band": band,
+            "forecast_scores": forecast_scores,
+            "cfi_state": new_cfi_state,
+            "calibration_mismatch": 0.0,  # Replace with outcome comparison later
+            "oscillation_index": self.state.oscillation_index,
+            "telemetry_record": telemetry,
+            "claim_record_revision": {"query": query, "claims": claims, "claim_states": claim_states},
+            "anchor_weight_adjustment": anchors,
+            "calibration_update_summary": {},
+            "resolved_lane": lane,
+        }
+        self.state.update_from_maintain(maintain_output)
+
+        return disclosed
+
+    def _probe_domain(self, query: str) -> str:
+        """Probe phase: classify domain from lightweight heuristics."""
+        query_lower = query.lower()
+
+        if "self" in query_lower or "i am" in query_lower or "my identity" in query_lower:
+            return "SED"
+
+        if (
+            "?" in query
+            or "what is" in query_lower
+            or "how" in query_lower
+            or "why" in query_lower
+            or "fact" in query_lower
+            or "explain" in query_lower
+        ):
+            return "EED"
+
+        return "WED"
+
+    def _get_anchors(self) -> Dict[str, float]:
+        """Load default anchor weights from spec. Replace with retrieval-backed grounding later."""
+        classes = self.spec["arc"]["trust_lattice"]["anchor_classes"]
+        return {anchor_name: anchor_cfg["default_weight"] for anchor_name, anchor_cfg in classes.items()}
+
+    def _resolve_lane(self, band: str, claim_states: List[str], candidate_lanes: List[str]) -> str:
+        """Resolve response lane using steering band + claim states + lane priority."""
+        # Steering-band overrides
+        if band == "retrieve_first":
+            return "retrieve_first"
+        if band == "clarify_first":
+            return "clarify_first"
+        if band == "abstain_cleanly":
+            return "abstain"
+        if band == "speculative_only":
+            return "speculative"
+
+        # Claim-state resolution
+        if claim_states and all(state in ["verified", "well_supported"] for state in claim_states):
+            preferred = "direct_answer"
+        elif any(state == "reasoned_inference" for state in claim_states):
+            preferred = "inference"
+        elif any(state == "weak_inference" for state in claim_states):
+            preferred = "weak_inference"
+        elif any(state == "speculative" for state in claim_states):
+            preferred = "speculative"
+        else:
+            preferred = "abstain"
+
+        # Honor lane priority order if present
+        if preferred in candidate_lanes:
+            return preferred
+
+        return "abstain"
+
+    def _apply_disclosure(self, lane: str, claim_states: List[str], base: str) -> str:
+        """Apply disclosure markers according to lane and underlying epistemic state."""
+        rules = self.spec["disclosure"]["rules"]
+
+        if lane == "direct_answer":
+            return base
+
+        # Map lane names to disclosure rule keys
+        lane_to_rule_key = {
+            "inference": "reasoned_inference",
+            "weak_inference": "weak_inference",
+            "speculative": "speculative",
+            "abstain": "unknown",
+            "retrieve_first": "unknown",
+            "clarify_first": "unknown",
+            "narrative": "narrative_not_fact",
         }
 
-    def branch(self, profile: Dict[str, Any]) -> Dict[str, Any]:
-        return {"candidate_branches": self.spec["platonic_5_plus_1"]["phases"]["B"]["candidate_branches"]}
+        rule_key = lane_to_rule_key.get(lane)
 
-    def map_phase(self, user_input: str) -> Dict[str, Any]:
-        claims = self.arc.decompose_claims(user_input)
-        dummy_support = {
-            "world_anchors": 0.5,
-            "empirical_anchors": 0.2,
-            "community_anchors": 0.2,
-            "memory_anchors": 0.4,
-            "user_anchors": 0.1,
+        # Fallback to strongest non-direct claim state if needed
+        if rule_key is None:
+            if "reasoned_inference" in claim_states:
+                rule_key = "reasoned_inference"
+            elif "weak_inference" in claim_states:
+                rule_key = "weak_inference"
+            elif "speculative" in claim_states:
+                rule_key = "speculative"
+            else:
+                rule_key = "unknown"
+
+        rule = rules[rule_key]
+
+        if rule.get            "user_anchors": 0.1,
             "conflict_load": 0.1,
         }
         scored = []
