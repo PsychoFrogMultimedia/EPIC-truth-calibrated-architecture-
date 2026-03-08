@@ -86,6 +86,58 @@ class EpicCore:
         r = self.resolve(p, m)
         out = self.define(r)
         self.state.record_telemetry({"probe": p, "resolved": r})
+        return out            "user_anchors": 0.1,
+            "conflict_load": 0.1,
+        }
+        scored = []
+        for claim in claims:
+            scores = self.arc.score_claim(claim, dummy_support)
+            state = self.arc.assign_state(scores)
+            scored.append({"claim": claim, "scores": scores, "state": state})
+        return {"claims": scored}
+
+    def resolve(self, probe: Dict[str, Any], mapped: Dict[str, Any]) -> Dict[str, Any]:
+        signals = {
+            "ambiguity_load": probe["ambiguity_load"],
+            "anchor_thinness": 1.0 - max((c["scores"]["anchor_strength"] for c in mapped["claims"]), default=0.0),
+            "bluff_pressure": 0.2,
+            "cost_of_wrong": probe["cost_of_wrong"],
+        }
+        band, guidance, new_cfi_state = self.cfi.forecast(signals, self.state.control_state)
+
+        resolved = []
+        for item in mapped["claims"]:
+            lanes = self.arc.legal_lanes(item["state"])
+            lane = "abstain" if band == "abstain_cleanly" else lanes[0]
+            resolved.append({**item, "lane": lane})
+
+        self.state.control_state = new_cfi_state
+        return {"band": band, "guidance": guidance, "claims": resolved}
+
+    def define(self, resolved: Dict[str, Any]) -> str:
+        rendered = []
+        for item in resolved["claims"]:
+            claim = item["claim"]
+            state = item["state"]
+            if state == "reasoned_inference":
+                rendered.append(f"Based on what is anchored here, the most likely reading is: {claim}.")
+            elif state == "weak_inference":
+                rendered.append(f"This is a tentative read: {claim}.")
+            elif state == "speculative":
+                rendered.append(f"This is speculative: {claim}.")
+            elif state == "unknown":
+                rendered.append("I do not have enough reliable basis to say.")
+            else:
+                rendered.append(claim + ".")
+        return " ".join(rendered)
+
+    def run(self, user_input: str) -> str:
+        p = self.probe(user_input)
+        _ = self.branch(p)
+        m = self.map_phase(user_input)
+        r = self.resolve(p, m)
+        out = self.define(r)
+        self.state.record_telemetry({"probe": p, "resolved": r})
         return out        # 5. ARC
         anchors = self._get_anchors()  # Expand to real retrieval
         anchor_score = self.arc.score_anchors(anchors)
