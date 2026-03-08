@@ -20,7 +20,12 @@ Addresses mathematical inevitability of hallucinations via upstream routing + di
 - `docs/EPIC-v1.0-Formal-Spec.md` —Formal Spec
 
 ## Status
-Conceptual + operational spec (v1.0). Reference impl / wrappers coming.
+
+- Conceptual + operational spec (v1.0)
+- Reference implementation in `src/` — loads the JSON spec and executes the full 8-step runtime loop (Probe → Branch → Map → CFI → ARC → Resolve → Define → Maintain)
+- Demo in `examples/run_epic.py` — run with `python examples/run_epic.py "your query"`
+- Wrappers (e.g., LLM integration, real RAG anchors) coming soon
+- Open for feedback, contributions, and evals!
 
 ## Contact: 
 
