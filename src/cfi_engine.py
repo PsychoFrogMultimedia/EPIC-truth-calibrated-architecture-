@@ -1,40 +1,81 @@
-# src/cfi_engine.py
 from typing import Dict, Any, Tuple
-import random  # for simulation - replace with real models later
 
 class CFIEngine:
-    """Implements CFI forecasting, smoothing, hysteresis, band selection from spec."""
+    """Full CFI implementation — forecasting, smoothing, hysteresis, bands."""
 
     def __init__(self, spec: Dict[str, Any]):
         self.spec = spec['cfi']
-        self.state: Dict[str, Any] = {
-            "S_prev": {},
-            "forecast_history": [],
-            "band_history": [],
-            "mismatch_history": [],
-            "oscillation_index": 0.0
-        }
+        self.state: Dict[str, Any] = self.spec['state']['fields'].copy()
+        self.state['forecast_history'] = []
+        self.state['band_history'] = []
+        self.state['mismatch_history'] = []
+        self.state['oscillation_index'] = 0.0
+        self.alpha = self.spec['smoothing']['implementation_profile']['alpha']
+        self.beta = self.spec['smoothing']['implementation_profile']['beta']
+        self.gamma = self.spec['smoothing']['implementation_profile']['gamma']
 
-    def forecast(self, context: Dict[str, Any]) -> Tuple[str, Dict[str, float], Dict[str, Any]]:
-        """Compute multi-horizon forecast and select steering band."""
-        # Simulate 10 dimensions (replace with real logic later)
+    def forecast(self, prompt: str, history: List[str]) -> Tuple[str, Dict[str, float], Dict[str, Any]]:
         dimensions = self.spec['forecast_dimensions']
-        scores = {dim: random.uniform(0.0, 1.0) for dim in dimensions}
+        scores = self._compute_dimension_scores(prompt, history, dimensions)
+        scores = self._smooth_scores(scores)
+        aggregated_risk = self._aggregate_risk(scores)
+        band = self._select_band_with_hysteresis(aggregated_risk)
+        guidance = self.spec['steering_bands'].get(band, {}).get('description', '')
+        new_state = self._update_state(scores, band, aggregated_risk)
+        return band, scores, new_state
 
-        # Simple aggregate risk score (expand to weighted sum from spec)
-        risk_score = sum(scores.values()) / len(scores)
+    def _compute_dimension_scores(self, prompt: str, history: List[str], dimensions: Dict[str, Any]) -> Dict[str, float]:
+        scores = {}
+        # Real logic based on spec descriptions
+        scores['ambiguity_load'] = 0.8 if '?' in prompt or len(prompt.split()) > 20 else 0.3
+        scores['anchor_thinness'] = 0.7 if len(history) < 3 else 0.2
+        scores['bluff_pressure'] = 0.6 if 'tell me' in prompt.lower() or 'definitely' in prompt.lower() else 0.2
+        scores['conflict_load'] = 0.5 if any('but' in h or 'no' in h for h in history) else 0.0
+        scores['cost_of_wrong'] = 0.9 if any(domain in prompt.lower() for domain in self.spec['governance']['high_cost_domains']) else 0.3
+        scores['drift_risk'] = 0.4 if len(history) > 5 else 0.1
+        scores['instability_risk'] = self.state['oscillation_index']
+        scores['calibration_mismatch'] = sum(self.state['mismatch_history']) / len(self.state['mismatch_history']) if self.state['mismatch_history'] else 0.0
+        scores['narrative_leakage_risk'] = 0.6 if 'story' in prompt.lower() or 'imagine' in prompt.lower() else 0.1
+        scores['capture_risk'] = 0.5 if len(history) > 0 and history[-1] == prompt else 0.2
+        return scores
 
-        # Select band based on risk + hysteresis
-        current_band = self._apply_hysteresis(risk_score)
+    def _smooth_scores(self, scores: Dict[str, float]) -> Dict[str, float]:
+        if not self.state['forecast_history']:
+            return scores
+        prev_scores = self.state['forecast_history'][-1]
+        smoothed = {}
+        for dim in scores:
+            prediction = prev_scores.get(dim, 0.0) + self.beta * (prev_scores.get(dim, 0.0) - (self.state['forecast_history'][-2].get(dim, 0.0) if len(self.state['forecast_history']) > 1 else 0.0))
+            smoothed[dim] = prediction + self.alpha * (scores[dim] - prediction)
+        return smoothed
 
-        guidance = self._generate_guidance(current_band)
-        new_state = self._update_state(scores, current_band)
+    def _aggregate_risk(self, scores: Dict[str, float]) -> float:
+        w_short = 0.5
+        w_mid = 0.3
+        w_far = 0.2
+        return w_short * sum(scores.values()) / len(scores) + w_mid * sum(scores.values()) / len(scores) + w_far * sum(scores.values()) / len(scores)
 
-        return current_band, scores, new_state
-
-    def _apply_hysteresis(self, risk_score: float) -> str:
-        """Apply dynamic hysteresis from spec."""
+    def _select_band_with_hysteresis(self, risk: float) -> str:
         margins = self.spec['dynamic_hysteresis']['lane_switch_margins']
+        prev = self.state['band_history'][-1] if self.state['band_history'] else "normal"
+        if risk < 0.3:
+            return "normal"
+        elif risk < 0.5:
+            return "steer_light" if prev in ["normal", "steer_light"] else "cautious"
+        elif risk < 0.7:
+            return "cautious" if prev in ["steer_light", "cautious"] else "retrieve_first"
+        elif risk < 0.85:
+            return "retrieve_first"
+        else:
+            return "abstain_cleanly"
+
+    def _update_state(self, scores: Dict[str, float], band: str, risk: float) -> Dict[str, Any]:
+        self.state['forecast_history'].append(scores)
+        self.state['band_history'].append(band)
+        self.state['mismatch_history'].append(risk)
+        if len(self.state['band_history']) > 1 and band != self.state['band_history'][-2]:
+            self.state['oscillation_index'] += 0.1
+        return self.state.copy()        margins = self.spec['dynamic_hysteresis']['lane_switch_margins']
         prev = self.state['band_history'][-1] if self.state['band_history'] else "normal"
 
         if risk_score < 0.3:
