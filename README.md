@@ -44,11 +44,3 @@ To try LLM-integrated wrappers or RAG examples (coming soon), install these depe
 
 ```bash
 pip install anthropic sentence-transformers faiss-cpu
-
-
-Or, if you want it shorter and inline with the demo section:
-
-```markdown
-- Demo in `examples/run_epic.py` — run with  
-  ```bash
-  python examples/run_epic.py "your query"
