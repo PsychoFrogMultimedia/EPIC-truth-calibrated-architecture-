@@ -73,3 +73,8 @@ A basic wrapper integrating Claude (via Anthropic API) + simple in-memory RAG fo
 
   ```bash
   pip install anthropic sentence-transformers 
+
+- Quick run example:
+- 
+  ```bash
+  python examples/epic_wrapper.py "Explain quantum entanglement and its implications for AI"
