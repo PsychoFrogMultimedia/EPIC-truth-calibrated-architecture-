@@ -1,40 +1,114 @@
-from __future__ import annotations
-from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from typing import Dict, Any, Tuple, List
 
 
-@dataclass
 class CFIEngine:
-    spec: Dict[str, Any]
+    """Full CFI implementation — forecasting, smoothing, hysteresis, and steering-band selection."""
 
-    def forecast(self, signals: Dict[str, float], prev_state: Dict[str, Any] | None = None) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
-        bands = self.spec["cfi"]["steering_bands"]
-        hysteresis = self.spec["cfi"]["dynamic_hysteresis"]["lane_switch_margins"]
+    def __init__(self, spec: Dict[str, Any]):
+        self.full_spec = spec
+        self.spec = spec["cfi"]
 
-        ambiguity = signals.get("ambiguity_load", 0.0)
-        thinness = signals.get("anchor_thinness", 0.0)
-        bluff = signals.get("bluff_pressure", 0.0)
-        cost = signals.get("cost_of_wrong", 0.0)
+        self.state: Dict[str, Any] = {
+            "S_prev": {},
+            "S_curr": {},
+            "forecast_history": [],
+            "band_history": [],
+            "mismatch_history": [],
+            "oscillation_index": 0.0,
+        }
 
-        score = max(
-            ambiguity * 0.25 + thinness * 0.25 + bluff * 0.30 + cost * 0.20,
-            0.0,
+        smoothing = self.spec["smoothing"]["implementation_profile"]
+        self.alpha = smoothing["alpha"]
+        self.beta = smoothing["beta"]
+        self.gamma = smoothing["gamma"]
+
+    def forecast(self, prompt: str, history: List[str]) -> Tuple[str, Dict[str, float], Dict[str, Any]]:
+        """Compute multi-horizon forecast and select steering band."""
+        scores = self._compute_dimension_scores(prompt, history)
+
+        # Apply smoothing only if we have prior history
+        if self.state["forecast_history"]:
+            scores = self._smooth_scores(scores)
+
+        short_risk = self._short_horizon_risk(scores)
+        mid_risk = self._mid_horizon_risk(scores, history)
+        far_risk = self._far_horizon_risk(scores)
+
+        # Weighted aggregate risk
+        w_short = 0.5
+        w_mid = 0.3
+        w_far = 0.2
+        aggregated_risk = (
+            w_short * short_risk +
+            w_mid * mid_risk +
+            w_far * far_risk
         )
+        aggregated_risk = self._clamp(aggregated_risk)
 
-        prev_band = (prev_state or {}).get("band", "normal")
+        band = self._select_band_with_hysteresis(aggregated_risk)
+        new_state = self._update_state(scores, band, aggregated_risk)
 
-        if score >= 0.80:
-            band = "abstain_cleanly"
-        elif score >= 0.65:
-            band = "retrieve_first"
-        elif ambiguity >= 0.60:
-            band = "clarify_first"
-        elif score >= 0.45:
-            band = "cautious"
-        elif score >= 0.25:
-            band = "steer_light"
-        else:
-            band = "normal"
+        return band, scores, new_state
+
+    def _compute_dimension_scores(self, prompt: str, history: List[str]) -> Dict[str, float]:
+        """Compute forecast dimension scores using lightweight deterministic heuristics."""
+        prompt_lower = prompt.lower()
+
+        high_cost_domains = self.full_spec["governance"]["high_cost_domains"]
+
+        scores: Dict[str, float] = {}
+        scores["ambiguity_load"] = 0.8 if ("?" in prompt or len(prompt.split()) > 20) else 0.3
+        scores["anchor_thinness"] = 0.7 if len(history) < 3 else 0.2
+        scores["bluff_pressure"] = 0.6 if any(word in prompt_lower for word in ["tell me", "definitely", "obviously"]) else 0.2
+        scores["conflict_load"] = 0.5 if any(word in h.lower() for h in history for word in ["but", "no", "wrong"]) else 0.0
+        scores["cost_of_wrong"] = 0.9 if any(domain in prompt_lower for domain in high_cost_domains) else 0.3
+        scores["drift_risk"] = 0.4 if len(history) > 5 else 0.1
+        scores["instability_risk"] = self._clamp(self.state["oscillation_index"])
+        scores["calibration_mismatch"] = self._average(self.state["mismatch_history"])
+        scores["narrative_leakage_risk"] = 0.6 if any(word in prompt_lower for word in ["story", "imagine", "as if"]) else 0.1
+        scores["capture_risk"] = 0.5 if len(history) > 0 and history[-1] == prompt else 0.2
+
+        return {k: self._clamp(v) for k, v in scores.items()}
+
+    def _smooth_scores(self, current_scores: Dict[str, float]) -> Dict[str, float]:
+        """Apply lightweight Kalman-like smoothing using prior forecast history."""
+        prev_scores = self.state["forecast_history"][-1]
+        prev_prev_scores = self.state["forecast_history"][-2] if len(self.state["forecast_history"]) > 1 else {}
+
+        smoothed: Dict[str, float] = {}
+        for dim, current_value in current_scores.items():
+            prev_value = prev_scores.get(dim, 0.0)
+            prev_delta = prev_value - prev_prev_scores.get(dim, 0.0)
+            prediction = prev_value + self.beta * prev_delta
+            smoothed_value = prediction + self.alpha * (current_value - prediction)
+            smoothed[dim] = self._clamp(smoothed_value)
+
+        return smoothed
+
+    def _short_horizon_risk(self, scores: Dict[str, float]) -> float:
+        """Immediate turn-level risk."""
+        return self._clamp(self._average(scores.values()))
+
+    def _mid_horizon_risk(self, scores: Dict[str, float], history: List[str]) -> float:
+        """Interaction trajectory risk across the active exchange."""
+        base = self._average(scores.values())
+        history_factor = min(len(history), 5) / 5.0  # normalize to [0,1]
+        return self._clamp(base * (0.7 + 0.3 * history_factor))
+
+    def _far_horizon_risk(self, scores: Dict[str, float]) -> float:
+        """Longer-range drift/control deformation risk."""
+        base = self._average(scores.values())
+        oscillation_penalty = min(self.state["oscillation_index"], 0.3)
+        return self._clamp(base + oscillation_penalty)
+
+    def _select_band_with_hysteresis(self, risk: float) -> str:
+        """Select steering band using stable thresholds with simple hysteresis."""
+        prev_band = self.state["band_history"][-1] if self.state["band_history"] else "normal"
+        margins = self.spec["dynamic_hysteresis"]["lane_switch_margins"]
+
+        # Base thresholds
+        if risk < 0.30:
+            proposed = "            band = "normal"
 
         # lightweight hysteresis
         if prev_band != band:
