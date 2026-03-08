@@ -1,5 +1,8 @@
 # EPIC v1.0 — Epistemic Predictive Integrity Core
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Status: Spec v1.0](https://img.shields.io/badge/status-spec--only-blue)](https://github.com/PsychoFrogMultimedia/EPIC-truth-calibrated-architecture-)
+
 A unified, model-agnostic architecture to enforce epistemic legibility in LLM outputs: distinguish grounded knowledge, inference, speculation, and unknowns **before** emission.
 
 Integrates:
