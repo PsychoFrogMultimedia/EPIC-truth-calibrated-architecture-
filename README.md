@@ -36,3 +36,7 @@ DM on X @D_McMillan76
 ## Built on ideas from 
 
 https://github.com/PsychoFrogMultimedia/Contextual-Forecasting-Integrator
+
+
+pip install anthropic sentence-transformers faiss-cpu
+Anthropic API
