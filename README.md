@@ -61,6 +61,8 @@ https://github.com/PsychoFrogMultimedia/Contextual-Forecasting-Integrator
 A basic wrapper integrating Claude (via Anthropic API) + simple in-memory RAG for ARC grounding is now available:
 
 - File: `examples/epic_wrapper.py`
-- Dependencies:  
+
+- Dependencies:
+
   ```bash
   pip install anthropic sentence-transformers 
