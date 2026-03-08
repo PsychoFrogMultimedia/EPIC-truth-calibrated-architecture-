@@ -1,7 +1,12 @@
+from pathlib import Path
+
+from src.epic_loader import load_epic_spec
+from src.epic_state import EpicState
 from src.epic_core import EpicCore
 
-if __name__ == "__main__":
-    epic = EpicCore()
-    query = "What is the capital of France?"
-    response = epic.process_query(query)
-    print("EPIC Response:", response)
+spec = load_epic_spec(Path("docs/EPIC-v10-Operational-Spec.json"))
+state = EpicState()
+core = EpicCore(spec, state)
+
+prompt = "What is the safest interpretation of this architecture under uncertainty?"
+print(core.run(prompt))
