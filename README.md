@@ -16,7 +16,8 @@ Addresses mathematical inevitability of hallucinations via upstream routing + di
 ## Core Files
 - `docs/EPIC-v10-Operational-Spec.json` — Complete runtime control spec
 - `docs/EPIC-v10-Companion.md` — Runtime behavior guide
-- (Formalization & Formal Spec as .md)
+- `docs/EPIC-v1.0-Formalization.md` — Formalization
+- `docs/EPIC-v1.0-Formal-Spec.md` —Formal Spec
 
 ## Status
 Conceptual + operational spec (v1.0). Reference impl / wrappers coming.
