@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="images/epic-banner.jpg" alt="EPIC Architecture Diagram" width="800"/>
+</p>
+
 # EPIC v1.0 — Epistemic Predictive Integrity Core
 
 
